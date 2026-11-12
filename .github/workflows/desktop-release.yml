@@ -111,7 +111,18 @@ jobs:
 
       - name: Install extra tools for Linux packaging
         if: matrix.os == 'ubuntu-latest'
-        run: sudo apt-get update && sudo apt-get install -y squashfs-tools desktop-file-validate
+        # squashfs-tools: appimagetool builds the image with mksquashfs. The
+        # validator lives in desktop-file-utils; a package named
+        # desktop-file-validate exists on some Ubuntu releases and not on
+        # resolute, where apt answers "Unable to locate package". appimagetool
+        # skips validation when the binary is missing, so a missing validator
+        # must not fail the step; a missing mksquashfs must.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y squashfs-tools
+          sudo apt-get install -y desktop-file-utils \
+            || sudo apt-get install -y desktop-file-validate \
+            || echo "no desktop-file-validate: appimagetool will skip validation"
 
       - name: Install app dependencies
         # --include=dev: an environment with NODE_ENV=production sets npm's
