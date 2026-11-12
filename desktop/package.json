@@ -4,6 +4,13 @@
   "private": true,
   "description": "Desktop shell for Pi Web: an Electron window around the Pi Web server.",
   "license": "MIT",
+  "author": "jeffvli <jeffvictorli@gmail.com>",
+  "homepage": "https://github.com/jeffvli/pi-web#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jeffvli/pi-web.git"
+  },
+  "desktopName": "com.github.jeffvli.piweb",
   "main": "main.js",
   "scripts": {
     "start": "electron .",

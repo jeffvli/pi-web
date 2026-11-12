@@ -68,6 +68,12 @@ nsis:
 linux:
   category: Development
   synopsis: Desktop app for the Pi Web UI of the pi coding agent
+  # The .deb is built by fpm, which refuses a package with no maintainer, and
+  # needs a homepage and an author email from the package metadata too.
+  maintainer: "jeffvli <jeffvictorli@gmail.com>"
+  # Window association: the .desktop entry's WM_CLASS has to match the app id,
+  # or desktop environments do not link running windows to the entry.
+  syncDesktopName: true
   target:
     - AppImage
     - deb
