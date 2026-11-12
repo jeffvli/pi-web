@@ -70,10 +70,14 @@ jobs:
           - os: windows-latest
             label: windows-x64
             builder: --win
-          - os: macos-14
+          # macos-14 was retired in June 2026: GitHub refuses it with "The
+          # configuration 'macos-14-arm64-us-default' is not supported", before
+          # any runner picks the job up. The x64 build is packaged on the arm64
+          # image, which electron-builder supports by fetching the x64 dist.
+          - os: macos-latest
             label: macos-arm64
             builder: --mac --arm64
-          - os: macos-14
+          - os: macos-latest
             label: macos-x64
             builder: --mac --x64
           - os: ubuntu-latest
