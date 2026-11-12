@@ -1,0 +1,85 @@
+# electron-builder configuration for the Pi Web desktop shell.
+#
+# Layout of a built app:
+#   resources/app.asar        the shell: main.js + server-process.js
+#   resources/app/            the Pi Web server: .next, node_modules, bin, public
+#
+# The Pi Web app lives outside the asar on purpose: next's server reads its own
+# files (pages manifest, prerender cache, public assets) with plain fs, and
+# spawns node scripts from bin/, none of which resolve inside an archive.
+
+appId: com.github.jeffvli.piweb
+productName: Pi Web
+executableName: pi-web-desktop
+copyright: MIT · Pi Web
+
+directories:
+  output: dist
+  buildResources: build
+
+# The shell's own sources. The Pi Web payload is not listed here: electron-builder
+# strips `**/node_modules/**` from every user file set (verified: the packaged
+# server started and died on Cannot find module 'next', both via extraResources
+# and via a files mapping with asarUnpack). scripts/after-pack.cjs copies the
+# staged tree in after packing, which is also what next's server needs: plain
+# files on disk, never inside an archive.
+files:
+  - package.json
+  - main.js
+  - server-process.js
+
+asar: true
+
+afterPack: ./scripts/after-pack.cjs
+
+# The staged app's node_modules is prebuilt for the target platform/arch in CI;
+# rebuilding it for Electron is unnecessary (node-pty is N-API) and slow.
+npmRebuild: false
+
+# No developer certificate: the macOS build gets electron-builder's ad-hoc
+# signature, which is enough to launch locally. Sign/notarize later by setting
+# CSC_LINK + notarize and dropping the two flags below.
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - dmg
+    - zip
+  notarize: false
+  gatekeeperAssess: false
+  hardenedRuntime: false
+  artifactName: ${name}-${version}-macos-${arch}.${ext}
+
+dmg:
+  artifactName: ${name}-${version}-macos-${arch}.${ext}
+
+win:
+  target:
+    - nsis
+    - msi
+  artifactName: ${name}-${version}-win-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  artifactName: ${name}-${version}-win-${arch}-setup.${ext}
+
+linux:
+  category: Development
+  synopsis: Desktop app for the Pi Web UI of the pi coding agent
+  target:
+    - AppImage
+    - deb
+  artifactName: ${name}-${version}-linux-${arch}.${ext}
+  # The Chromium sandbox uses unprivileged user namespaces, which every current
+  # target distro enables. electron-builder 26 has no chromeSandbox key, so a
+  # distro without them needs `--no-sandbox` at launch; see README (Limits).
+
+# The GitHub Release feed. Unsigned today, so nothing consumes these files yet;
+# keeping them in the release means the auto-updater needs only a signing key.
+publish:
+  provider: github
+  owner: jeffvli
+  repo: pi-web
+  vPrefixedTagName: true

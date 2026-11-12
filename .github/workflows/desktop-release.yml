@@ -1,0 +1,183 @@
+name: Desktop Release
+
+# Builds the desktop app (desktop/) for every platform and attaches the
+# installers to the GitHub Release of the pushed tag.
+#
+# Versioning follows upstream: the artifact is Pi Web <version>, and the tag is
+# checked against package.json exactly like publish.yml's check-tag job.
+# The app version comes from package.json; desktop/package.json must match it
+# (node desktop/scripts/sync-version.mjs).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # No developer certificate: the macOS build is ad-hoc signed and not
+  # notarized. Set CSC_LINK/CSC_KEY_PASSWORD and flip mac flags in
+  # desktop/electron-builder.yml to ship a signed build.
+  CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+jobs:
+  check-tag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag matches package.json
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package.json version $version"
+            exit 1
+          fi
+
+      - name: Check the shell version matches
+        run: node desktop/scripts/sync-version.mjs --check
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install shell dependencies
+        # --include=dev: an environment with NODE_ENV=production sets npm's
+        # omit=dev, which drops Electron and the shell's dev toolchain.
+        working-directory: desktop
+        run: npm ci --include=dev --no-audit --no-fund
+
+      - name: Shell tests
+        working-directory: desktop
+        run: npm test
+
+  build:
+    needs: check-tag
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: windows-x64
+            builder: --win
+          - os: macos-14
+            label: macos-arm64
+            builder: --mac --arm64
+          - os: macos-14
+            label: macos-x64
+            builder: --mac --x64
+          - os: ubuntu-latest
+            label: linux
+            builder: --linux
+    name: build ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
+
+      - name: Cache Electron downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+            ~/.cache/electron-debug
+          key: electron-${{ matrix.label }}-${{ hashFiles('desktop/package-lock.json', 'desktop/electron-builder.yml') }}
+          restore-keys: |
+            electron-${{ matrix.label }}-
+            electron-
+
+      - name: Install extra tools for Linux packaging
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y squashfs-tools desktop-file-validate
+
+      - name: Install app dependencies
+        # --include=dev: an environment with NODE_ENV=production sets npm's
+        # omit=dev, which would drop the build toolchain (and Electron).
+        run: npm ci --include=dev --no-audit --no-fund
+
+      - name: Build the web app
+        run: npm run build
+
+      - name: Install shell dependencies
+        working-directory: desktop
+        run: npm ci --include=dev --no-audit --no-fund
+
+      - name: Stage the app payload
+        run: node desktop/scripts/prepare-app.mjs
+
+      - name: Build installers
+        working-directory: desktop
+        run: npx electron-builder ${{ matrix.builder }} --publish never
+
+      - name: Verify the packaged server runs
+        working-directory: desktop
+        run: node scripts/verify-packaged.mjs
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-web-desktop-${{ matrix.label }}-${{ github.ref_name }}
+          path: |
+            desktop/dist/*.exe
+            desktop/dist/*.msi
+            desktop/dist/*.dmg
+            desktop/dist/*.zip
+            desktop/dist/*.AppImage
+            desktop/dist/*.deb
+            desktop/dist/latest*.yml
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pi-web-desktop-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Attach installers to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          append_body: true
+          fail_on_unexisting_files: true
+          body: |
+            ## Desktop app (Pi Web ${{ github.ref_name }})
+
+            Unsigned builds: Windows SmartScreen shows "unknown publisher", and a
+            macOS download needs `xattr -d com.apple.quarantine` on the .app.
+
+            | File | Platform |
+            | --- | --- |
+            | `*-win-x64-setup.exe` | Windows x64 installer (NSIS) |
+            | `*-win-x64.msi` | Windows x64 installer (MSI) |
+            | `*-macos-arm64.dmg` | macOS Apple Silicon |
+            | `*-macos-x64.dmg` | macOS Intel |
+            | `*-linux-x86_64.AppImage` | Linux AppImage |
+            | `*-linux_amd64.deb` | Linux deb (Debian/Ubuntu) |
