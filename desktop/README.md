@@ -83,16 +83,19 @@ from a running dev server's `.next`.
 
 ## Release
 
-Push a `v*` tag, the same tag that publishes npm and Docker:
+Run `.github/workflows/desktop-release.yml` from the Actions tab, or push the
+`v*` tag that publishes npm and Docker:
 
 ```bash
 git push origin main v0.16.0
 ```
-`.github/workflows/desktop-release.yml` checks the tag against `package.json`
-(like `publish.yml` does), creates the **draft** release for that tag in one job
-so nothing races to create it, then four jobs — Windows x64, macOS arm64,
-macOS x64, Linux — each build, verify their packaged server over HTTP, and
-publish their own installers and `latest*.yml` update feeds to that draft:
+
+The workflow is one matrix job and nothing else. Each platform — Windows x64,
+macOS arm64, macOS x64, Linux — builds, stages its payload for the right
+architecture, packages, verifies the packaged server over HTTP, and publishes
+with `electron-builder --publish always`, which creates the **draft** release
+named `v<package.json version>` when it is missing and uploads its installers
+and `latest*.yml` update feeds to it:
 
 | File | Platform |
 | --- | --- |
@@ -104,10 +107,11 @@ publish their own installers and `latest*.yml` update feeds to that draft:
 | `pi-web-desktop-<version>-linux_amd64.deb` | Linux deb |
 
 The workflow never marks the release ready: you write the notes and publish it,
-as [docs/release.md](../docs/release.md) describes. A rerun of the same tag
-replaces same-named assets on the existing draft. `workflow_dispatch` publishes
-nothing at all — it builds, verifies and uploads the installers as workflow
-artifacts, which is how you test a change to the shell or the workflow.
+as [docs/release.md](../docs/release.md) describes. A run whose tag does not
+exist makes GitHub create the tag at the dispatched commit, so a manual run is a
+real dry run of the release path; a pushed `v*` tag — the tag that also publishes
+npm and Docker — appends the desktop assets to that tag's release. A push to
+`main` publishes nothing.
 
 The draft is deliberate: an updater must not pick a build that is still
 arriving, and the release is only trustworthy once you publish it.

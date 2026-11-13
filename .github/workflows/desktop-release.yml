@@ -1,18 +1,15 @@
 name: Desktop Release
 
-# Builds the desktop app (desktop/) for every platform. On a v* tag each job
-# publishes its installers to the draft GitHub Release for that tag
-# (electron-builder's github provider, releaseType: draft), and the draft is
-# created here first so the jobs only ever append to it. Marking the release
-# ready, with hand-written notes, stays a human step (docs/release.md).
+# Builds the desktop app (desktop/) for every platform and publishes the
+# installers with electron-builder, which creates the draft release for
+# v<package.json version> and uploads its assets and update feeds. Publishing
+# is unconditional: a workflow_dispatch run creates the tag the release names
+# from the dispatched commit, and a pushed v* tag appends to that tag's release.
+# Marking the release ready, with hand-written notes, stays a human step
+# (docs/release.md).
 #
-# A workflow_dispatch run publishes nothing: it builds, verifies and uploads the
-# same installers as workflow artifacts.
-#
-# Versioning follows upstream: the artifact is Pi Web <version>, and the tag is
-# checked against package.json exactly like publish.yml's check-tag job.
-# The app version comes from package.json; desktop/package.json must match it
-# (node desktop/scripts/sync-version.mjs).
+# Versioning follows upstream: the app version is package.json's version, and
+# desktop/package.json must match it (node desktop/scripts/sync-version.mjs).
 
 on:
   push:
@@ -20,7 +17,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: desktop-${{ github.workflow }}-${{ github.ref }}
@@ -31,63 +28,12 @@ env:
   # notarized. Set CSC_LINK/CSC_KEY_PASSWORD and flip mac flags in
   # desktop/electron-builder.yml to ship a signed build.
   CSC_IDENTITY_AUTO_DISCOVERY: "false"
+  # electron-builder's github provider, and gh, authenticate with this.
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
-  check-tag:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    # Only used to pre-create the draft release for the tag.
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Check the tag matches package.json
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          version=$(node -p "require('./package.json').version")
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::tag $GITHUB_REF_NAME does not match package.json version $version"
-            exit 1
-          fi
-
-      - name: Create the draft release for the tag
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # One creator: four platform jobs looking for "the release for this tag"
-        # and making it when absent is a race that has produced duplicate drafts.
-        # Idempotent, so a rerun of a tag appends to the release it made.
-        run: |
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "release $GITHUB_REF_NAME exists; the platform jobs will append to it"
-          else
-            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft \
-              --title "$GITHUB_REF_NAME" \
-              --notes "Desktop builds for $GITHUB_REF_NAME are being uploaded by ${{ github.workflow }}."
-          fi
-
-      - name: Check the shell version matches
-        run: node desktop/scripts/sync-version.mjs --check
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: desktop/package-lock.json
-
-      - name: Install shell dependencies
-        # --include=dev: an environment with NODE_ENV=production sets npm's
-        # omit=dev, which drops Electron and the shell's dev toolchain.
-        working-directory: desktop
-        run: npm ci --include=dev --no-audit --no-fund
-
-      - name: Shell tests
-        working-directory: desktop
-        run: npm test
-
   build:
-    needs: check-tag
     strategy:
       fail-fast: false
       matrix:
@@ -96,10 +42,10 @@ jobs:
             label: windows-x64
             builder: --win
             payloadTarget: --cpu=x64 --os=win32
-          # macos-14 was retired in June 2026: GitHub refuses it with "The
-          # configuration 'macos-14-arm64-us-default' is not supported", before
-          # any runner picks the job up. The x64 build is packaged on the arm64
-          # image, which electron-builder supports by fetching the x64 dist.
+          # The x64 build is packaged on the arm64 image, which electron-builder
+          # supports by fetching the x64 Electron dist. macos-14 was retired in
+          # June 2026: GitHub refuses it with "The configuration
+          # 'macos-14-arm64-us-default' is not supported".
           - os: macos-latest
             label: macos-arm64
             builder: --mac --arm64
@@ -115,9 +61,6 @@ jobs:
     name: build ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
-    # electron-builder appends assets to the draft release on tag runs.
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -168,6 +111,13 @@ jobs:
         working-directory: desktop
         run: npm ci --include=dev --no-audit --no-fund
 
+      - name: Check the shell version matches
+        run: node desktop/scripts/sync-version.mjs --check
+
+      - name: Shell tests
+        working-directory: desktop
+        run: npm test
+
       - name: Stage the app payload
         # Dependencies are selected for the target, not the runner. The macOS
         # x64 job builds on arm64 hardware: with the runner's selection, the
@@ -175,30 +125,10 @@ jobs:
         # server that never listens.
         run: node desktop/scripts/prepare-app.mjs ${{ matrix.payloadTarget }}
 
-      - name: Build installers
+      - name: Build installers and publish to the release
         working-directory: desktop
-        # A tag publishes to the draft release for that tag; a manual run
-        # publishes nothing and keeps its installers as artifacts.
-        run: npx electron-builder ${{ matrix.builder }} --publish ${{ startsWith(github.ref, 'refs/tags/v') && 'always' || 'never' }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder ${{ matrix.builder }} --publish always
 
       - name: Verify the packaged server runs
         working-directory: desktop
         run: node scripts/verify-packaged.mjs
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: pi-web-desktop-${{ matrix.label }}-${{ github.ref_name }}
-          path: |
-            desktop/dist/*.exe
-            desktop/dist/*.msi
-            desktop/dist/*.dmg
-            desktop/dist/*.zip
-            desktop/dist/*.AppImage
-            desktop/dist/*.deb
-            desktop/dist/latest*.yml
-          if-no-files-found: error
-          retention-days: 30

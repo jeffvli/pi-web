@@ -60,17 +60,23 @@ next's server reads its own files with plain fs and spawns scripts from `bin/`.
 
 ## Versioning follows upstream
 
-`package.json` is the version: a `v0.16.0` tag yields a desktop app of 0.16.0,
-and the workflow's tag check mirrors `publish.yml`'s `check-tag` job.
-`desktop/package.json` carries the same number (checked by `sync-version.mjs
---check`) because electron-builder reads the version from the package it builds.
-No desktop-only version line, no `-desktop` suffix: the release is the app.
+`package.json` is the version, and electron-builder derives the release tag from
+it (`vPrefixedTagName: true`): the build of 0.16.0 publishes to `v0.16.0`, so a
+pushed tag can never disagree with the build the way `publish.yml`'s `check-tag`
+job guards against. `desktop/package.json` carries the same number (checked by
+`sync-version.mjs --check`) because electron-builder reads the version from the
+package it builds. No desktop-only version line, no `-desktop` suffix: the
+release is the app.
 
-Publishing goes to a **draft** release: `publish.releaseType: draft`, with the
-draft created by one job (`check-tag`) so the four platform jobs only append to
-it — jobs that each look up "the release for this tag" and create it when absent
-are a race. Marking the release ready stays human, matching docs/release.md,
-which also means an updater never sees a build that is still arriving.
+Publishing is unconditional, in the shape of feishin's `publish-<os>` workflows:
+the build step runs `electron-builder --publish always` with the run's
+`GITHUB_TOKEN`, and electron-builder creates the release for `v<version>` — a
+draft, `publish.releaseType: draft` — and uploads its own assets. No artifact
+hand-off job, no tag gating, no `if:` in front of the publish. A dispatch run
+whose tag is missing makes GitHub create the tag at the dispatched commit, which
+is why a manual run is a real dry run of the release path. Marking the release
+ready stays human, matching docs/release.md, which also means an updater never
+sees a build that is still arriving.
 
 ## Security model
 
