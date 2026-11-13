@@ -88,11 +88,11 @@ Push a `v*` tag, the same tag that publishes npm and Docker:
 ```bash
 git push origin main v0.16.0
 ```
-
 `.github/workflows/desktop-release.yml` checks the tag against `package.json`
-(like `publish.yml` does), builds four jobs — Windows x64, macOS arm64, macOS
-x64, Linux — verifies each packaged server answers over HTTP, and attaches the
-installers to the GitHub Release:
+(like `publish.yml` does), creates the **draft** release for that tag in one job
+so nothing races to create it, then four jobs — Windows x64, macOS arm64,
+macOS x64, Linux — each build, verify their packaged server over HTTP, and
+publish their own installers and `latest*.yml` update feeds to that draft:
 
 | File | Platform |
 | --- | --- |
@@ -103,9 +103,14 @@ installers to the GitHub Release:
 | `pi-web-desktop-<version>-linux-x86_64.AppImage` | Linux AppImage |
 | `pi-web-desktop-<version>-linux_amd64.deb` | Linux deb |
 
-`workflow_dispatch` builds the same artifacts as workflow attachments, without a
-tag. The app version always comes from `package.json`, so the desktop build of
-Pi Web 0.16.0 is version 0.16.0.
+The workflow never marks the release ready: you write the notes and publish it,
+as [docs/release.md](../docs/release.md) describes. A rerun of the same tag
+replaces same-named assets on the existing draft. `workflow_dispatch` publishes
+nothing at all — it builds, verifies and uploads the installers as workflow
+artifacts, which is how you test a change to the shell or the workflow.
+
+The draft is deliberate: an updater must not pick a build that is still
+arriving, and the release is only trustworthy once you publish it.
 
 ## Signing
 
@@ -132,7 +137,8 @@ only signing.
 
 - The server has no password by default, exactly like `pi-web` on the CLI: any
   local process can drive it. See [DESIGN.md](./DESIGN.md) for the model.
-- No auto-updater yet (needs signing), no tray, no deep links.
+- No auto-updater yet: it needs signed installers, and the update feeds in a
+  draft release are not readable by an updater until you publish the release.
 - Menus are English; the web UI keeps its own language setting.
 - On Windows, quitting force-kills the server tree (no signal to forward).
 - On Linux the Chromium sandbox uses unprivileged user namespaces, which current

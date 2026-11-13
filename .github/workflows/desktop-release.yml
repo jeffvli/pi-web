@@ -1,7 +1,13 @@
 name: Desktop Release
 
-# Builds the desktop app (desktop/) for every platform and attaches the
-# installers to the GitHub Release of the pushed tag.
+# Builds the desktop app (desktop/) for every platform. On a v* tag each job
+# publishes its installers to the draft GitHub Release for that tag
+# (electron-builder's github provider, releaseType: draft), and the draft is
+# created here first so the jobs only ever append to it. Marking the release
+# ready, with hand-written notes, stays a human step (docs/release.md).
+#
+# A workflow_dispatch run publishes nothing: it builds, verifies and uploads the
+# same installers as workflow artifacts.
 #
 # Versioning follows upstream: the artifact is Pi Web <version>, and the tag is
 # checked against package.json exactly like publish.yml's check-tag job.
@@ -30,6 +36,9 @@ jobs:
   check-tag:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Only used to pre-create the draft release for the tag.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -40,6 +49,22 @@ jobs:
           if [ "v$version" != "$GITHUB_REF_NAME" ]; then
             echo "::error::tag $GITHUB_REF_NAME does not match package.json version $version"
             exit 1
+          fi
+
+      - name: Create the draft release for the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # One creator: four platform jobs looking for "the release for this tag"
+        # and making it when absent is a race that has produced duplicate drafts.
+        # Idempotent, so a rerun of a tag appends to the release it made.
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME exists; the platform jobs will append to it"
+          else
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft \
+              --title "$GITHUB_REF_NAME" \
+              --notes "Desktop builds for $GITHUB_REF_NAME are being uploaded by ${{ github.workflow }}."
           fi
 
       - name: Check the shell version matches
@@ -90,6 +115,9 @@ jobs:
     name: build ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    # electron-builder appends assets to the draft release on tag runs.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -149,7 +177,12 @@ jobs:
 
       - name: Build installers
         working-directory: desktop
-        run: npx electron-builder ${{ matrix.builder }} --publish never
+        # A tag publishes to the draft release for that tag; a manual run
+        # publishes nothing and keeps its installers as artifacts.
+        run: npx electron-builder ${{ matrix.builder }} --publish ${{ startsWith(github.ref, 'refs/tags/v') && 'always' || 'never' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify the packaged server runs
         working-directory: desktop
@@ -169,38 +202,3 @@ jobs:
             desktop/dist/latest*.yml
           if-no-files-found: error
           retention-days: 30
-
-  release:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: pi-web-desktop-*
-          path: artifacts
-          merge-multiple: true
-
-      - name: Attach installers to the release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: artifacts/*
-          append_body: true
-          fail_on_unexisting_files: true
-          body: |
-            ## Desktop app (Pi Web ${{ github.ref_name }})
-
-            Unsigned builds: Windows SmartScreen shows "unknown publisher", and a
-            macOS download needs `xattr -d com.apple.quarantine` on the .app.
-
-            | File | Platform |
-            | --- | --- |
-            | `*-win-x64-setup.exe` | Windows x64 installer (NSIS) |
-            | `*-win-x64.msi` | Windows x64 installer (MSI) |
-            | `*-macos-arm64.dmg` | macOS Apple Silicon |
-            | `*-macos-x64.dmg` | macOS Intel |
-            | `*-linux-x86_64.AppImage` | Linux AppImage |
-            | `*-linux_amd64.deb` | Linux deb (Debian/Ubuntu) |

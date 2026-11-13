@@ -82,10 +82,13 @@ linux:
   # target distro enables. electron-builder 26 has no chromeSandbox key, so a
   # distro without them needs `--no-sandbox` at launch; see README (Limits).
 
-# The GitHub Release feed. Unsigned today, so nothing consumes these files yet;
-# keeping them in the release means the auto-updater needs only a signing key.
+# The GitHub Release feed. Each platform job appends its assets and update
+# files to the draft release for the tag. The workflow pre-creates that draft,
+# so four jobs never race to create it, and marking the release ready stays a
+# human step, with hand-written notes, as docs/release.md has it.
 publish:
   provider: github
   owner: jeffvli
   repo: pi-web
   vPrefixedTagName: true
+  releaseType: draft

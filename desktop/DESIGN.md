@@ -66,6 +66,12 @@ and the workflow's tag check mirrors `publish.yml`'s `check-tag` job.
 --check`) because electron-builder reads the version from the package it builds.
 No desktop-only version line, no `-desktop` suffix: the release is the app.
 
+Publishing goes to a **draft** release: `publish.releaseType: draft`, with the
+draft created by one job (`check-tag`) so the four platform jobs only append to
+it — jobs that each look up "the release for this tag" and create it when absent
+are a race. Marking the release ready stays human, matching docs/release.md,
+which also means an updater never sees a build that is still arriving.
+
 ## Security model
 
 - The renderer is remote content: `sandbox: true`, `contextIsolation: true`,
