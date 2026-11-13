@@ -31,11 +31,20 @@ const EXCLUDE_PATHS = [
 const EXCLUDE_SUFFIXES = [".js.map", ".map", ".tsbuildinfo", ".log", ".test.mjs"];
 
 function parseArgs(argv) {
-  const options = { out: join(desktopDir, "app-staging"), install: true, clean: true };
+  const options = { out: join(desktopDir, "app-staging"), install: true, clean: true, cpu: null, os: null, libc: null };
   for (let i = 2; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--out" || arg === "--output") options.out = resolve(argv[++i] ?? options.out);
     else if (arg.startsWith("--out=")) options.out = resolve(arg.slice("--out=".length));
+    // The target architecture, passed to npm's optional-dependency selection.
+    // A cross-arch job (macOS x64 built on an arm64 runner) otherwise installs
+    // the runner's binaries, which the packaged app cannot load.
+    else if (arg === "--cpu") options.cpu = argv[++i] ?? null;
+    else if (arg.startsWith("--cpu=")) options.cpu = arg.slice("--cpu=".length);
+    else if (arg === "--os") options.os = argv[++i] ?? null;
+    else if (arg.startsWith("--os=")) options.os = arg.slice("--os=".length);
+    else if (arg === "--libc") options.libc = argv[++i] ?? null;
+    else if (arg.startsWith("--libc=")) options.libc = arg.slice("--libc=".length);
     else if (arg === "--no-install") options.install = false;
     else if (arg === "--no-clean") options.clean = false;
     else throw new Error(`Unknown argument: ${arg}`);
@@ -101,10 +110,15 @@ function main() {
     cpSync(source, join(options.out, entry), { recursive: true, filter });
   }
 
+  const targetFlags = [];
+  if (options.cpu) targetFlags.push(`--cpu=${options.cpu}`);
+  if (options.os) targetFlags.push(`--os=${options.os}`);
+  if (options.libc) targetFlags.push(`--libc=${options.libc}`);
+
   if (options.install) {
     const npm = process.platform === "win32" ? "npm.cmd" : "npm";
     // shell:true: Node refuses to spawn .cmd files without a shell.
-    const result = spawnSync(npm, ["ci", "--omit=dev", "--no-audit", "--no-fund", "--loglevel=warn"], {
+    const result = spawnSync(npm, ["ci", "--omit=dev", "--no-audit", "--no-fund", "--loglevel=warn", ...targetFlags], {
       cwd: options.out,
       stdio: "inherit",
       shell: process.platform === "win32",
@@ -116,6 +130,20 @@ function main() {
   }
 
   const { bytes, files } = measure(options.out);
+  if (options.os && options.cpu) {
+    // node-pty is the app's only native module, and it ships per-architecture
+    // prebuilds that its installer picks for the build machine. Name the
+    // mismatch here rather than in the app's terminal feature.
+    const prebuilds = join(options.out, "node_modules", "node-pty", "prebuilds");
+    const wanted = `${options.os}-${options.cpu}`;
+    if (existsSync(prebuilds) && !existsSync(join(prebuilds, wanted))) {
+      const have = readdirSync(prebuilds).join(", ");
+      console.warn(
+        `WARNING: node-pty has no prebuilds/${wanted} (found: ${have}). `
+        + "The terminal feature will fail in the packaged app.",
+      );
+    }
+  }
   const shellPkg = JSON.parse(readFileSync(join(desktopDir, "package.json"), "utf8"));
   writeFileSync(
     join(options.out, "pi-web-desktop.json"),
@@ -125,6 +153,11 @@ function main() {
         shellVersion: shellPkg.version,
         builtAt: new Date().toISOString(),
         builtByNode: process.versions.node,
+        // What the dependencies were selected for, so a payload built on a
+        // runner of a different architecture is visible, and verifiable.
+        targetCpu: options.cpu,
+        targetOs: options.os,
+        targetLibc: options.libc,
         files,
         mb: Math.round(bytes / (1024 * 1024)),
       },
@@ -134,6 +167,7 @@ function main() {
   );
 
   console.log(`Staged ${files} files, ${Math.round(bytes / (1024 * 1024))} MB at ${options.out}`);
+  if (targetFlags.length) console.log(`Dependencies selected for ${targetFlags.join(" ")}`);
   if (excluded.length) console.log(`Excluded ${excluded.length} build-cache/map/dev paths.`);
 }
 

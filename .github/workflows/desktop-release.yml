@@ -70,6 +70,7 @@ jobs:
           - os: windows-latest
             label: windows-x64
             builder: --win
+            payloadTarget: --cpu=x64 --os=win32
           # macos-14 was retired in June 2026: GitHub refuses it with "The
           # configuration 'macos-14-arm64-us-default' is not supported", before
           # any runner picks the job up. The x64 build is packaged on the arm64
@@ -77,12 +78,15 @@ jobs:
           - os: macos-latest
             label: macos-arm64
             builder: --mac --arm64
+            payloadTarget: --cpu=arm64 --os=darwin
           - os: macos-latest
             label: macos-x64
             builder: --mac --x64
+            payloadTarget: --cpu=x64 --os=darwin
           - os: ubuntu-latest
             label: linux
             builder: --linux
+            payloadTarget: --cpu=x64 --os=linux
     name: build ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
@@ -137,7 +141,11 @@ jobs:
         run: npm ci --include=dev --no-audit --no-fund
 
       - name: Stage the app payload
-        run: node desktop/scripts/prepare-app.mjs
+        # Dependencies are selected for the target, not the runner. The macOS
+        # x64 job builds on arm64 hardware: with the runner's selection, the
+        # x64 app cannot load native packages and verify-packaged fails on a
+        # server that never listens.
+        run: node desktop/scripts/prepare-app.mjs ${{ matrix.payloadTarget }}
 
       - name: Build installers
         working-directory: desktop

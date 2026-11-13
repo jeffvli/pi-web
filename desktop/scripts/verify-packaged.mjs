@@ -19,7 +19,9 @@ import { fileURLToPath } from "node:url";
 const desktopDir = dirname(dirname(fileURLToPath(import.meta.url)));
 
 function parseArgs(argv) {
-  const options = { dist: join(desktopDir, "dist"), timeoutMs: 90_000 };
+  // A Rosetta-translated build on an arm64 runner boots the server slowly, so
+  // the default allows for it; native runs answer in seconds.
+  const options = { dist: join(desktopDir, "dist"), timeoutMs: 240_000 };
   for (let i = 2; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--dist") options.dist = argv[++i] ?? options.dist;
@@ -94,6 +96,22 @@ async function main() {
     ? JSON.parse(readFileSync(join(appDir, "pi-web-desktop.json"), "utf8"))
     : null;
 
+  // An architecture mismatch between the payload's dependencies and the app
+  // that loads them shows up as a server that never listens, so name both
+  // sides of it up front.
+  const archLine = `runner ${process.platform}/${process.arch}; payload dependencies selected for `
+    + `${stamp?.targetOs ?? "the build machine"}/${stamp?.targetCpu ?? "the build machine"}`;
+  console.log(archLine);
+  const mismatch = Boolean(stamp?.targetCpu)
+    && ((stamp.targetOs && stamp.targetOs !== process.platform) || stamp.targetCpu !== process.arch);
+  if (mismatch) {
+    console.error(
+      `MISMATCH: this app's dependencies were installed for ${stamp.targetOs}/${stamp.targetCpu} `
+      + `and are being run as ${process.platform}/${process.arch}. `
+      + "Native packages will fail to load; pass the matching --cpu/--os to prepare-app.",
+    );
+  }
+
   const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
   const logDir = join(tmpdir(), "pi-web-desktop-verify");
@@ -157,6 +175,7 @@ async function main() {
   if (!home) {
     console.error(`Packaged server did not answer at ${url}: ${lastFailure}`);
     console.error(`exit: ${JSON.stringify(exited)}`);
+    console.error(archLine);
     console.error(tail);
     process.exit(1);
   }
@@ -164,7 +183,7 @@ async function main() {
   const count = JSON.parse(home.sessions.body).sessions.length;
   console.log(
     `Packaged server OK: pi-web ${stamp?.piWebVersion ?? "unknown"}, shell ${stamp?.shellVersion ?? "unknown"}, `
-    + `${count} sessions listed at ${url}`,
+    + `${count} sessions listed at ${url} (${process.platform}/${process.arch})`,
   );
 }
 
