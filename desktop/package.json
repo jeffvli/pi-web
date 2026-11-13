@@ -1,0 +1,31 @@
+{
+  "name": "pi-web-desktop",
+  "version": "0.16.0",
+  "private": true,
+  "description": "Desktop shell for Pi Web: an Electron window around the Pi Web server.",
+  "license": "MIT",
+  "author": "jeffvli <jeffvictorli@gmail.com>",
+  "homepage": "https://github.com/jeffvli/pi-web#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jeffvli/pi-web.git"
+  },
+  "desktopName": "com.github.jeffvli.piweb",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --server-url http://127.0.0.1:30141",
+    "sync-version": "node scripts/sync-version.mjs",
+    "prepare-app": "node scripts/prepare-app.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "ci:local": "node scripts/ci-local.mjs",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "verify": "node scripts/verify-packaged.mjs",
+    "test": "node --test \"test/*.test.mjs\""
+  },
+  "devDependencies": {
+    "electron": "^45.3.1",
+    "electron-builder": "^26.18.0"
+  }
+}

@@ -1,0 +1,8 @@
+# Build output, staged payload and shell dependencies live only in this folder,
+# so merging upstream never touches a rule upstream owns.
+node_modules/
+app-staging/
+dist/
+smoke/
+*.log
+.DS_Store

@@ -1,0 +1,134 @@
+name: Desktop Release
+
+# Builds the desktop app (desktop/) for every platform and publishes the
+# installers with electron-builder, which creates the draft release for
+# v<package.json version> and uploads its assets and update feeds. Publishing
+# is unconditional: a workflow_dispatch run creates the tag the release names
+# from the dispatched commit, and a pushed v* tag appends to that tag's release.
+# Marking the release ready, with hand-written notes, stays a human step
+# (docs/release.md).
+#
+# Versioning follows upstream: the app version is package.json's version, and
+# desktop/package.json must match it (node desktop/scripts/sync-version.mjs).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # No developer certificate: the macOS build is ad-hoc signed and not
+  # notarized. Set CSC_LINK/CSC_KEY_PASSWORD and flip mac flags in
+  # desktop/electron-builder.yml to ship a signed build.
+  CSC_IDENTITY_AUTO_DISCOVERY: "false"
+  # electron-builder's github provider, and gh, authenticate with this.
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: windows-x64
+            builder: --win
+            payloadTarget: --cpu=x64 --os=win32
+          # The x64 build is packaged on the arm64 image, which electron-builder
+          # supports by fetching the x64 Electron dist. macos-14 was retired in
+          # June 2026: GitHub refuses it with "The configuration
+          # 'macos-14-arm64-us-default' is not supported".
+          - os: macos-latest
+            label: macos-arm64
+            builder: --mac --arm64
+            payloadTarget: --cpu=arm64 --os=darwin
+          - os: macos-latest
+            label: macos-x64
+            builder: --mac --x64
+            payloadTarget: --cpu=x64 --os=darwin
+          - os: ubuntu-latest
+            label: linux
+            builder: --linux
+            payloadTarget: --cpu=x64 --os=linux
+    name: build ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
+
+      - name: Cache Electron downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+            ~/.cache/electron-debug
+          key: electron-${{ matrix.label }}-${{ hashFiles('desktop/package-lock.json', 'desktop/electron-builder.yml') }}
+          restore-keys: |
+            electron-${{ matrix.label }}-
+            electron-
+
+      - name: Install extra tools for Linux packaging
+        if: matrix.os == 'ubuntu-latest'
+        # squashfs-tools: appimagetool builds the image with mksquashfs. The
+        # validator lives in desktop-file-utils; a package named
+        # desktop-file-validate exists on some Ubuntu releases and not on
+        # resolute, where apt answers "Unable to locate package". appimagetool
+        # skips validation when the binary is missing, so a missing validator
+        # must not fail the step; a missing mksquashfs must.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y squashfs-tools
+          sudo apt-get install -y desktop-file-utils \
+            || sudo apt-get install -y desktop-file-validate \
+            || echo "no desktop-file-validate: appimagetool will skip validation"
+
+      - name: Install app dependencies
+        # --include=dev: an environment with NODE_ENV=production sets npm's
+        # omit=dev, which would drop the build toolchain (and Electron).
+        run: npm ci --include=dev --no-audit --no-fund
+
+      - name: Build the web app
+        run: npm run build
+
+      - name: Install shell dependencies
+        working-directory: desktop
+        run: npm ci --include=dev --no-audit --no-fund
+
+      - name: Check the shell version matches
+        run: node desktop/scripts/sync-version.mjs --check
+
+      - name: Shell tests
+        working-directory: desktop
+        run: npm test
+
+      - name: Stage the app payload
+        # Dependencies are selected for the target, not the runner. The macOS
+        # x64 job builds on arm64 hardware: with the runner's selection, the
+        # x64 app cannot load native packages and verify-packaged fails on a
+        # server that never listens.
+        run: node desktop/scripts/prepare-app.mjs ${{ matrix.payloadTarget }}
+
+      - name: Build installers and publish to the release
+        working-directory: desktop
+        run: npx electron-builder ${{ matrix.builder }} --publish always
+
+      - name: Verify the packaged server runs
+        working-directory: desktop
+        run: node scripts/verify-packaged.mjs
